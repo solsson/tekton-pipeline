@@ -272,6 +272,7 @@ PiplineTask defines a task in a Pipeline, passing inputs from both `Params`` and
 | `params`     | [][`Param`](#param)                                               | REQUIRED    | Declares parameters passed to this task.                                                                                                                                          |
 | `workspaces` | [][`WorkspacePipelineTaskBinding`](#workspacepipelinetaskbinding) | REQUIRED    | Workspaces maps workspaces from the pipeline spec to the workspaces declared in the Task.                                                                                         |
 | `timeout`    | int64                                                             | REQUIRED    | Time after which the TaskRun times out.  Setting the timeout to 0 implies no timeout. There isn't a default max timeout set.                                                      |
+| `retryOn`    | string (Enum: `"notSucceeded"`, `"noResult"`)                  | OPTIONAL    | Controls when retries are attempted for this task (see also the [`retries` field](pipelines.md#using-the-retries-field)). The default is `"notSucceeded"` which retries when the TaskRun's `Succeeded` condition is `False`. Set to `"noResult"` to retry when the TaskRun is in a terminal `Unknown` state and all steps have terminated (i.e., no conclusive success or failure result). |
 
 ### TaskRef
 
