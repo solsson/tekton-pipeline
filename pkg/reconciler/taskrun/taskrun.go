@@ -165,13 +165,17 @@ func (c *Reconciler) ReconcileKind(ctx context.Context, tr *v1.TaskRun) pkgrecon
 				logger.Infof("Using Kubernetes Native Sidecars \n")
 			}
 		}
+		var stopErr error
 		if useTektonSidecar {
 			if err := c.stopSidecars(ctx, tr); err != nil {
-				return err
+				// Propagate the error to finishReconcileUpdateEmitEvents so that we still
+				// evaluate retry logic (e.g., retryOn=noResult) and emit events before
+				// returning a permanent error.
+				stopErr = err
 			}
 		}
 
-		return c.finishReconcileUpdateEmitEvents(ctx, tr, before, nil)
+		return c.finishReconcileUpdateEmitEvents(ctx, tr, before, stopErr)
 	}
 
 	// If the TaskRun is cancelled, kill resources and update status
@@ -405,6 +409,9 @@ func (c *Reconciler) finishReconcileUpdateEmitEvents(ctx context.Context, tr *v1
 		}
 	}
 	joinedErr := errors.Join(errs...)
+	// If stopSidecars (or another earlier step) yielded a permanent error, return it after
+	// we handled retries/events/annotations above. This preserves the prior behavior of
+	// surfacing a permanent error while allowing retryOn to be evaluated.
 	if controller.IsPermanentError(previousError) {
 		return controller.NewPermanentError(joinedErr)
 	}

@@ -592,6 +592,56 @@ spec:
 		}
 	})
 
+	// When the pod disappears (deleted/evicted) we still evaluate retryOn=noResult and trigger a retry
+	t.Run("RetryOn noResult: pod deleted counts as noResult and triggers retry", func(t *testing.T) {
+		tr := &v1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "tr-noresult-pod-deleted",
+				Namespace: "foo",
+				Annotations: map[string]string{
+					v1.PipelineTaskRetryOnAnnotation: "noResult",
+				},
+			},
+			Spec: v1.TaskRunSpec{Retries: 1, TaskRef: &v1.TaskRef{Name: "test-task"}},
+			Status: v1.TaskRunStatus{
+				TaskRunStatusFields: v1.TaskRunStatusFields{
+					PodName: "pod-gone",
+					Steps: []v1.StepState{
+						{ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}, Name: "step1", Container: "step-step1"},
+						{ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}, Name: "step2", Container: "step-step2"},
+					},
+				},
+			},
+		}
+		tr.Status.Conditions = append(tr.Status.Conditions, apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionUnknown,
+			Reason:  v1.TaskRunReasonRunning.String(),
+			Message: "pod disappeared",
+		})
+
+		data := test.Data{TaskRuns: []*v1.TaskRun{tr}, Tasks: []*v1.Task{simpleTask}}
+		testAssets, cancel := getTaskRunController(t, data)
+		defer cancel()
+		c := testAssets.Controller
+		createServiceAccount(t, testAssets, "default", tr.Namespace)
+		// No pod seeded in the lister; since tr.Status.PodName is set, Get will be NotFound.
+		if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(tr)); err != nil {
+			// Allow a requeue error, but not a hard failure
+			if ok, _ := controller.IsRequeueKey(err); !ok {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+		got, err := testAssets.Clients.Pipeline.TektonV1().TaskRuns(tr.Namespace).Get(testAssets.Ctx, tr.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get tr: %v", err)
+		}
+		cond := got.Status.GetCondition(apis.ConditionSucceeded)
+		if cond == nil || cond.Reason != v1.TaskRunReasonToBeRetried.String() || cond.Status != corev1.ConditionUnknown {
+			t.Fatalf("expected ToBeRetried Unknown after pod deletion, got %v", cond)
+		}
+	})
+
 	t.Run("RetryOn noResult: do not retry on explicit failure", func(t *testing.T) {
 		tr := &v1.TaskRun{
 			ObjectMeta: metav1.ObjectMeta{
