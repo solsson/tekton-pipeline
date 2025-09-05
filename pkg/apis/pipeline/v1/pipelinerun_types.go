@@ -427,6 +427,9 @@ const (
 // PipelineTaskOnErrorAnnotation is used to pass the failure strategy to TaskRun pods from PipelineTask OnError field
 const PipelineTaskOnErrorAnnotation = "pipeline.tekton.dev/pipeline-task-on-error"
 
+// PipelineTaskRetryOnAnnotation is used to pass the retry strategy to TaskRun from PipelineTask retryOn field
+const PipelineTaskRetryOnAnnotation = "pipeline.tekton.dev/pipeline-task-retry-on"
+
 func (t PipelineRunReason) String() string {
 	return string(t)
 }

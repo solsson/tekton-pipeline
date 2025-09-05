@@ -542,6 +542,90 @@ spec:
 			}
 		})
 	}
+
+		// Additional tests for retryOn noResult behavior
+		t.Run("RetryOn noResult: retry when terminal Unknown and steps terminated", func(t *testing.T) {
+				tr := parse.MustParseV1TaskRun(t, `
+metadata:
+	name: tr-noresult-retry
+	namespace: foo
+	annotations:
+		pipeline.tekton.dev/pipeline-task-retry-on: noResult
+spec:
+	retries: 1
+status:
+	steps:
+	- name: step1
+		container: step-step1
+		terminated:
+			exitCode: 0
+			reason: Completed
+	- name: step2
+		container: step-step2
+		terminated:
+			exitCode: 0
+			reason: Completed
+	conditions:
+	- type: Succeeded
+		status: Unknown
+		reason: Running
+		message: "pending status"
+`)
+				data := test.Data{TaskRuns: []*v1.TaskRun{tr}}
+				testAssets, cancel := getTaskRunController(t, data)
+				defer cancel()
+				c := testAssets.Controller
+				createServiceAccount(t, testAssets, "default", tr.Namespace)
+				if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(tr)); err != nil {
+						if ok, _ := controller.IsRequeueKey(err); !ok {
+								t.Fatalf("unexpected error: %v", err)
+						}
+				}
+				got, err := testAssets.Clients.Pipeline.TektonV1().TaskRuns(tr.Namespace).Get(testAssets.Ctx, tr.Name, metav1.GetOptions{})
+				if err != nil {
+						t.Fatalf("get tr: %v", err)
+				}
+				cond := got.Status.GetCondition(apis.ConditionSucceeded)
+				if cond == nil || cond.Reason != v1.TaskRunReasonToBeRetried.String() || cond.Status != corev1.ConditionUnknown {
+						t.Fatalf("expected ToBeRetried Unknown, got %v", cond)
+				}
+		})
+
+		t.Run("RetryOn noResult: do not retry on explicit failure", func(t *testing.T) {
+				tr := parse.MustParseV1TaskRun(t, `
+metadata:
+	name: tr-noresult-no-retry-on-failed
+	namespace: foo
+	annotations:
+		pipeline.tekton.dev/pipeline-task-retry-on: noResult
+spec:
+	retries: 1
+status:
+	conditions:
+	- type: Succeeded
+		status: "False"
+		reason: Failed
+		message: "explicit failure"
+`)
+				data := test.Data{TaskRuns: []*v1.TaskRun{tr}}
+				testAssets, cancel := getTaskRunController(t, data)
+				defer cancel()
+				c := testAssets.Controller
+				createServiceAccount(t, testAssets, "default", tr.Namespace)
+				if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(tr)); err != nil {
+						if ok, _ := controller.IsRequeueKey(err); !ok {
+								t.Fatalf("unexpected error: %v", err)
+						}
+				}
+				got, err := testAssets.Clients.Pipeline.TektonV1().TaskRuns(tr.Namespace).Get(testAssets.Ctx, tr.Name, metav1.GetOptions{})
+				if err != nil {
+						t.Fatalf("get tr: %v", err)
+				}
+				cond := got.Status.GetCondition(apis.ConditionSucceeded)
+				if cond == nil || cond.Reason == v1.TaskRunReasonToBeRetried.String() {
+						t.Fatalf("expected no retry on Failed, got %v", cond)
+				}
+		})
 }
 
 // TestReconcile_CloudEvents runs reconcile with a cloud event sink configured

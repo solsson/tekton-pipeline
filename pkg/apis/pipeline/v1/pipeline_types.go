@@ -217,6 +217,14 @@ type PipelineTask struct {
 	// +optional
 	Retries int `json:"retries,omitempty"`
 
+	// RetryOn controls when a failed attempt should be retried.
+	// Supported values:
+	// - "notSucceeded" (default): retry when completion status != Succeeded
+	// - "noResult": retry when completion is neither Failed nor Succeeded
+	// +kubebuilder:validation:Enum=notSucceeded;noResult
+	// +optional
+	RetryOn string `json:"retryOn,omitempty"`
+
 	// RunAfter is the list of PipelineTask names that should be executed before
 	// this Task executes. (Used to force a specific ordering in graph execution.)
 	// +optional

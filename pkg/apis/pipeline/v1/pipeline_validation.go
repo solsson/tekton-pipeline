@@ -192,6 +192,16 @@ func (pt PipelineTask) Validate(ctx context.Context) (errs *apis.FieldError) {
 
 	errs = errs.Also(pt.ValidateOnError(ctx))
 
+	// Validate RetryOn values when specified as a literal (not a param ref)
+	if pt.RetryOn != "" && !isParamRefs(pt.RetryOn) {
+		switch pt.RetryOn {
+		case "notSucceeded", "noResult":
+			// ok
+		default:
+			errs = errs.Also(apis.ErrInvalidValue(pt.RetryOn, "retryOn", "PipelineTask retryOn must be either \"notSucceeded\" or \"noResult\""))
+		}
+	}
+
 	// Pipeline task having taskRef/taskSpec with APIVersion is classified as custom task
 	switch {
 	case pt.TaskRef != nil && !taskKinds[pt.TaskRef.Kind]:

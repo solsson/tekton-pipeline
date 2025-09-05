@@ -364,9 +364,29 @@ func (c *Reconciler) finishReconcileUpdateEmitEvents(ctx context.Context, tr *v1
 	logger := logging.FromContext(ctx)
 
 	afterCondition := tr.Status.GetCondition(apis.ConditionSucceeded)
-	if afterCondition.IsFalse() && !tr.IsCancelled() && tr.IsRetriable() {
-		retryTaskRun(tr, afterCondition.Message)
-		afterCondition = tr.Status.GetCondition(apis.ConditionSucceeded)
+	// Determine retry behavior based on annotation propagated from PipelineTask
+	retryOn := tr.Annotations[v1.PipelineTaskRetryOnAnnotation]
+	if retryOn == "" {
+		retryOn = "notSucceeded"
+	}
+	if !tr.IsCancelled() && tr.IsRetriable() {
+		switch retryOn {
+		case "noResult":
+			// Retry when the TaskRun reached a terminal state without a clear Succeeded/Failed outcome.
+			// Guard against retrying while still running by ensuring all steps are terminated.
+			if afterCondition.IsUnknown() && isTerminalNoResult(tr) {
+				retryTaskRun(tr, afterCondition.Message)
+				afterCondition = tr.Status.GetCondition(apis.ConditionSucceeded)
+			}
+		case "notSucceeded":
+			fallthrough
+		default:
+			// Default behavior: retry on explicit failure only
+			if afterCondition.IsFalse() {
+				retryTaskRun(tr, afterCondition.Message)
+				afterCondition = tr.Status.GetCondition(apis.ConditionSucceeded)
+			}
+		}
 	}
 	// Send k8s events and cloud events (when configured)
 	events.Emit(ctx, beforeCondition, afterCondition, tr)
@@ -389,6 +409,21 @@ func (c *Reconciler) finishReconcileUpdateEmitEvents(ctx context.Context, tr *v1
 		return controller.NewPermanentError(joinedErr)
 	}
 	return joinedErr
+}
+
+// isTerminalNoResult returns true if all step containers have terminated but the TaskRun
+// ConditionSucceeded remains Unknown, indicating no definitive result.
+func isTerminalNoResult(tr *v1.TaskRun) bool {
+	// If there are no recorded step states, we cannot assert terminality.
+	if len(tr.Status.Steps) == 0 {
+		return false
+	}
+	for _, s := range tr.Status.Steps {
+		if s.Terminated == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // `prepare` fetches resources the taskrun depends on, runs validation and conversion

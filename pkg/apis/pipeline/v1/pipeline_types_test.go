@@ -156,6 +156,70 @@ func TestPipelineTask_OnError(t *testing.T) {
 	}
 }
 
+func TestPipelineTask_RetryOn_Validation(t *testing.T) {
+	tests := []struct {
+		name          string
+		p             PipelineTask
+		expectedError *apis.FieldError
+	}{
+		{
+			name: "valid retryOn notSucceeded",
+			p: PipelineTask{
+				Name:    "foo",
+				RetryOn: "notSucceeded",
+				TaskRef: &TaskRef{Name: "foo"},
+			},
+		},
+		{
+			name: "valid retryOn noResult",
+			p: PipelineTask{
+				Name:    "foo",
+				RetryOn: "noResult",
+				TaskRef: &TaskRef{Name: "foo"},
+			},
+		},
+		{
+			name: "invalid retryOn value",
+			p: PipelineTask{
+				Name:    "foo",
+				RetryOn: "invalid-val",
+				TaskRef: &TaskRef{Name: "foo"},
+			},
+			expectedError: apis.ErrInvalidValue("invalid-val", "retryOn", "PipelineTask retryOn must be either \"notSucceeded\" or \"noResult\""),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			err := tt.p.Validate(ctx)
+			if tt.expectedError == nil {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				if d := cmp.Diff(tt.expectedError.Error(), err.Error(), cmpopts.IgnoreUnexported(apis.FieldError{})); d != "" {
+					t.Errorf("PipelineTask.Validate() errors diff %s", diff.PrintWantGot(d))
+				}
+			}
+		})
+	}
+}
+
+func TestPipelineTask_RetryOn_Default(t *testing.T) {
+	pt := &PipelineTask{
+		Name:    "foo",
+		TaskRef: &TaskRef{Name: "foo"},
+	}
+	ctx := t.Context()
+	pt.SetDefaults(ctx)
+	if pt.RetryOn != "notSucceeded" {
+		t.Fatalf("default retryOn = %q, want notSucceeded", pt.RetryOn)
+	}
+}
+
 func TestPipelineTask_ValidateRefOrSpec(t *testing.T) {
 	tests := []struct {
 		name          string
