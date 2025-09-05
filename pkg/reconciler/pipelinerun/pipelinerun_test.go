@@ -18386,3 +18386,85 @@ spec:
 		})
 	}
 }
+
+// TestCreateTaskRun_PropagatesRetryOn verifies that PipelineTask.retryOn is propagated
+// as an annotation on the created TaskRun.
+func TestCreateTaskRun_PropagatesRetryOn(t *testing.T) {
+	prName := "test-pr"
+	namespace := "default"
+	pr := &v1.PipelineRun{
+		ObjectMeta: metav1.ObjectMeta{Name: prName, Namespace: namespace},
+		Spec: v1.PipelineRunSpec{
+			PipelineSpec: &v1.PipelineSpec{
+				Tasks: []v1.PipelineTask{{
+					Name:    "hello",
+					TaskRef: &v1.TaskRef{Name: "hello-task"},
+				}},
+			},
+		},
+	}
+
+	// Feature flags minimal config
+	featureFlagsConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: system.Namespace(), Name: config.GetFeatureFlagsConfigName()},
+		Data:       map[string]string{"enable-wait-exponential-backoff": "false"},
+	}
+
+	// Seed a simple Task so resolution succeeds
+	task := &v1.Task{
+		ObjectMeta: metav1.ObjectMeta{Name: "hello-task", Namespace: namespace},
+		Spec:       v1.TaskSpec{Steps: []v1.Step{{Name: "s", Image: "busybox", Script: "echo hi"}}},
+	}
+
+	d := test.Data{
+		PipelineRuns: []*v1.PipelineRun{pr},
+		Tasks:        []*v1.Task{task},
+		ConfigMaps:   []*corev1.ConfigMap{featureFlagsConfig},
+	}
+	testAssets, cancel := getPipelineRunController(t, d)
+	defer cancel()
+	r := &Reconciler{
+		KubeClientSet:     testAssets.Clients.Kube,
+		PipelineClientSet: testAssets.Clients.Pipeline,
+		Clock:             clock.NewFakePassiveClock(time.Now()),
+		tracerProvider:    tracing.New("pipelinerun", logtesting.TestLogger(t)),
+	}
+
+	// Capture the created TaskRun to assert annotations
+	var createdTR *v1.TaskRun
+	testAssets.Clients.Pipeline.PrependReactor("create", "taskruns", func(action ktesting.Action) (bool, runtime.Object, error) {
+		createAction := action.(ktesting.CreateAction)
+		tr := createAction.GetObject().(*v1.TaskRun)
+		createdTR = tr
+		return true, tr, nil
+	})
+
+	// Build a ResolvedPipelineTask with retryOn set
+	rpt := &resources.ResolvedPipelineTask{
+		PipelineTask: &v1.PipelineTask{
+			Name:    "hello",
+			RetryOn: "noResult",
+			TaskRef: &v1.TaskRef{Name: "hello-task"},
+		},
+		ResolvedTask: &taskresources.ResolvedTask{
+			TaskName: "hello-task",
+			TaskSpec: &v1.TaskSpec{Steps: []v1.Step{{Name: "s", Image: "busybox", Script: "echo hi"}}},
+		},
+	}
+
+	facts := &resources.PipelineRunFacts{}
+	trName := "test-pr-hello"
+	ctx := testAssets.Ctx
+
+	result, err := r.createTaskRun(ctx, trName, nil, rpt, pr, facts)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if result == nil || createdTR == nil {
+		t.Fatalf("expected TaskRun to be created")
+	}
+	got := createdTR.Annotations[v1.PipelineTaskRetryOnAnnotation]
+	if got != "noResult" {
+		t.Fatalf("expected annotation %s=noResult, got %q", v1.PipelineTaskRetryOnAnnotation, got)
+	}
+}

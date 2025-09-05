@@ -739,6 +739,28 @@ tasks:
       name: build-push
 ```
 
+### Controlling when retries happen with `retryOn`
+
+By default, retries occur when a `TaskRun` explicitly fails (`Succeeded` condition is `False`). You can fine-tune this behavior per `PipelineTask` with the optional `retryOn` field:
+
+- `notSucceeded` (default): retry when the `TaskRun` is marked `False` (failed).
+- `noResult`: retry when the `TaskRun` remains in a terminal `Unknown` state and all steps have terminated, meaning no conclusive success or failure result was produced (for example, infrastructure conditions prevented a clear result).
+
+This allows you to avoid retrying on clear user failures while still retrying on inconclusive outcomes.
+
+Example: retry only when there is no conclusive result
+
+```yaml
+tasks:
+  - name: build-the-image
+    retries: 1
+    retryOn: noResult
+    taskRef:
+      name: build-push
+```
+
+Note: `retryOn` does not change how many retries are attempted (use `retries` for that); it only controls under which status outcomes a retry is triggered.
+
 ### Using the `onError` field
 
 When a `PipelineTask` fails, the rest of the `PipelineTasks` are skipped and the `PipelineRun` is declared a failure. If you would like to

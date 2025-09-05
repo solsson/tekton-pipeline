@@ -2974,7 +2974,19 @@ int
 </td>
 <td>
 <em>(Optional)</em>
-<p>Retries represents how many times this task should be retried in case of task failure: ConditionSucceeded set to False</p>
+<p>Retries represents how many times this task should be retried when a retry is triggered. See also <code>retryOn</code> to control which outcomes trigger a retry.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>retryOn</code><br/>
+<em>
+string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>Controls when retries are attempted for this task. One of <code>notSucceeded</code> (default) or <code>noResult</code>. <code>notSucceeded</code> retries when the TaskRun's <code>Succeeded</code> condition is <code>False</code>. <code>noResult</code> retries when the TaskRun is in a terminal <code>Unknown</code> state and all steps have terminated (no conclusive success or failure result).</p>
 </td>
 </tr>
 <tr>

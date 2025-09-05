@@ -1069,6 +1069,11 @@ func (c *Reconciler) createTaskRun(ctx context.Context, taskRunName string, para
 		tr.Annotations[v1.PipelineTaskOnErrorAnnotation] = string(v1.PipelineTaskContinue)
 	}
 
+	// Propagate retryOn behavior from PipelineTask to TaskRun via annotation
+	if rpt.PipelineTask.RetryOn != "" {
+		tr.Annotations[v1.PipelineTaskRetryOnAnnotation] = rpt.PipelineTask.RetryOn
+	}
+
 	if rpt.PipelineTask.Timeout != nil {
 		tr.Spec.Timeout = rpt.PipelineTask.Timeout
 	}

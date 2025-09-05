@@ -542,6 +542,145 @@ spec:
 			}
 		})
 	}
+
+	// Additional tests for retryOn noResult behavior
+	t.Run("RetryOn noResult: retry when terminal Unknown and steps terminated", func(t *testing.T) {
+		tr := &v1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "tr-noresult-retry",
+				Namespace: "foo",
+				Annotations: map[string]string{
+					v1.PipelineTaskRetryOnAnnotation: "noResult",
+				},
+			},
+			Spec: v1.TaskRunSpec{
+				Retries: 1,
+				TaskRef: &v1.TaskRef{Name: "test-task"},
+			},
+			Status: v1.TaskRunStatus{
+				TaskRunStatusFields: v1.TaskRunStatusFields{
+					Steps: []v1.StepState{
+						{ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}, Name: "step1", Container: "step-step1"},
+						{ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}, Name: "step2", Container: "step-step2"},
+					},
+				},
+			},
+		}
+		tr.Status.Conditions = append(tr.Status.Conditions, apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionUnknown,
+			Reason:  v1.TaskRunReasonRunning.String(),
+			Message: "pending status",
+		})
+		data := test.Data{TaskRuns: []*v1.TaskRun{tr}, Tasks: []*v1.Task{simpleTask}}
+		testAssets, cancel := getTaskRunController(t, data)
+		defer cancel()
+		c := testAssets.Controller
+		createServiceAccount(t, testAssets, "default", tr.Namespace)
+		if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(tr)); err != nil {
+			if ok, _ := controller.IsRequeueKey(err); !ok {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+		got, err := testAssets.Clients.Pipeline.TektonV1().TaskRuns(tr.Namespace).Get(testAssets.Ctx, tr.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get tr: %v", err)
+		}
+		cond := got.Status.GetCondition(apis.ConditionSucceeded)
+		if cond == nil || cond.Reason != v1.TaskRunReasonToBeRetried.String() || cond.Status != corev1.ConditionUnknown {
+			t.Fatalf("expected ToBeRetried Unknown, got %v", cond)
+		}
+	})
+
+	// When the pod disappears (deleted/evicted) we still evaluate retryOn=noResult and trigger a retry
+	t.Run("RetryOn noResult: pod deleted counts as noResult and triggers retry", func(t *testing.T) {
+		tr := &v1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "tr-noresult-pod-deleted",
+				Namespace: "foo",
+				Annotations: map[string]string{
+					v1.PipelineTaskRetryOnAnnotation: "noResult",
+				},
+			},
+			Spec: v1.TaskRunSpec{Retries: 1, TaskRef: &v1.TaskRef{Name: "test-task"}},
+			Status: v1.TaskRunStatus{
+				TaskRunStatusFields: v1.TaskRunStatusFields{
+					PodName: "pod-gone",
+					Steps: []v1.StepState{
+						{ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}, Name: "step1", Container: "step-step1"},
+						{ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}, Name: "step2", Container: "step-step2"},
+					},
+				},
+			},
+		}
+		tr.Status.Conditions = append(tr.Status.Conditions, apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionUnknown,
+			Reason:  v1.TaskRunReasonRunning.String(),
+			Message: "pod disappeared",
+		})
+
+		data := test.Data{TaskRuns: []*v1.TaskRun{tr}, Tasks: []*v1.Task{simpleTask}}
+		testAssets, cancel := getTaskRunController(t, data)
+		defer cancel()
+		c := testAssets.Controller
+		createServiceAccount(t, testAssets, "default", tr.Namespace)
+		// No pod seeded in the lister; since tr.Status.PodName is set, Get will be NotFound.
+		if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(tr)); err != nil {
+			// Allow a requeue error, but not a hard failure
+			if ok, _ := controller.IsRequeueKey(err); !ok {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+		got, err := testAssets.Clients.Pipeline.TektonV1().TaskRuns(tr.Namespace).Get(testAssets.Ctx, tr.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get tr: %v", err)
+		}
+		cond := got.Status.GetCondition(apis.ConditionSucceeded)
+		if cond == nil || cond.Reason != v1.TaskRunReasonToBeRetried.String() || cond.Status != corev1.ConditionUnknown {
+			t.Fatalf("expected ToBeRetried Unknown after pod deletion, got %v", cond)
+		}
+	})
+
+	t.Run("RetryOn noResult: do not retry on explicit failure", func(t *testing.T) {
+		tr := &v1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "tr-noresult-no-retry-on-failed",
+				Namespace: "foo",
+				Annotations: map[string]string{
+					v1.PipelineTaskRetryOnAnnotation: "noResult",
+				},
+			},
+			Spec: v1.TaskRunSpec{
+				Retries: 1,
+				TaskRef: &v1.TaskRef{Name: "test-task"},
+			},
+		}
+		tr.Status.Conditions = append(tr.Status.Conditions, apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionFalse,
+			Reason:  v1.TaskRunReasonFailed.String(),
+			Message: "explicit failure",
+		})
+		data := test.Data{TaskRuns: []*v1.TaskRun{tr}, Tasks: []*v1.Task{simpleTask}}
+		testAssets, cancel := getTaskRunController(t, data)
+		defer cancel()
+		c := testAssets.Controller
+		createServiceAccount(t, testAssets, "default", tr.Namespace)
+		if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(tr)); err != nil {
+			if ok, _ := controller.IsRequeueKey(err); !ok {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+		got, err := testAssets.Clients.Pipeline.TektonV1().TaskRuns(tr.Namespace).Get(testAssets.Ctx, tr.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get tr: %v", err)
+		}
+		cond := got.Status.GetCondition(apis.ConditionSucceeded)
+		if cond == nil || cond.Reason == v1.TaskRunReasonToBeRetried.String() {
+			t.Fatalf("expected no retry on Failed, got %v", cond)
+		}
+	})
 }
 
 // TestReconcile_CloudEvents runs reconcile with a cloud event sink configured
@@ -1525,61 +1664,75 @@ status:
     startTime: "2021-12-31T00:00:00Z"
     completionTime: "2022-01-01T00:00:00Z"
     `)
-		toFailOnPodFailureTaskRun = parse.MustParseV1TaskRun(t, `
-metadata:
-  name: test-taskrun-run-retry-pod-failure
-  namespace: foo
-spec:
-  retries: 1
-  taskRef:
-    name: test-task
-status:
-  startTime: "2021-12-31T23:59:59Z"
-  podName: test-taskrun-run-retry-pod-failure-pod
-  steps:
-  - container: step-unamed-0
-    name: unamed-0
-    waiting:
-      reason: "ImagePullBackOff"
-`)
-		failedOnPodFailureTaskRun = parse.MustParseV1TaskRun(t, `
-metadata:
-  name: test-taskrun-run-retry-pod-failure
-  namespace: foo
-spec:
-  retries: 1
-  taskRef:
-    name: test-task
-status:
-  conditions:
-  - reason: ToBeRetried
-    status: Unknown
-    type: Succeeded
-    message: "the step \"unamed-0\" in TaskRun \"test-taskrun-run-retry-pod-failure\" failed to pull the image \"\". The pod errored with the message: \".\""
-  steps:
-  - container: step-unamed-0
-    name: unamed-0
-    terminated:
-      exitCode: 1
-      finishedAt: "2022-01-01T00:00:00Z"
-      reason: "TaskRunImagePullFailed"
-  retriesStatus:
-  - conditions:
-    - reason: "TaskRunImagePullFailed"
-      status: "False"
-      type: Succeeded
-      message: "the step \"unamed-0\" in TaskRun \"test-taskrun-run-retry-pod-failure\" failed to pull the image \"\". The pod errored with the message: \".\""
-    startTime: "2021-12-31T23:59:59Z"
-    completionTime: "2022-01-01T00:00:00Z"
-    podName: test-taskrun-run-retry-pod-failure-pod
-    steps:
-    - container: step-unamed-0
-      name: unamed-0
-      terminated:
-        exitCode: 1
-        finishedAt: "2022-01-01T00:00:00Z"
-        reason: "TaskRunImagePullFailed"
-`)
+		toFailOnPodFailureTaskRun = &v1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-run-retry-pod-failure",
+				Namespace: "foo",
+			},
+			Spec: v1.TaskRunSpec{
+				Retries: 1,
+				TaskRef: &v1.TaskRef{Name: "test-task"},
+			},
+			Status: v1.TaskRunStatus{
+				TaskRunStatusFields: v1.TaskRunStatusFields{
+					StartTime: &metav1.Time{Time: time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC)},
+					PodName:   "test-taskrun-run-retry-pod-failure-pod",
+					Steps: []v1.StepState{{
+						Name:           "unamed-0",
+						Container:      "step-unamed-0",
+						ContainerState: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}},
+					}},
+				},
+			},
+		}
+
+		failedOnPodFailureTaskRun = &v1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-run-retry-pod-failure",
+				Namespace: "foo",
+			},
+			Spec: v1.TaskRunSpec{
+				Retries: 1,
+				TaskRef: &v1.TaskRef{Name: "test-task"},
+			},
+			Status: v1.TaskRunStatus{
+				Status: duckv1.Status{
+					Conditions: duckv1.Conditions{apis.Condition{
+						Type:    apis.ConditionSucceeded,
+						Status:  corev1.ConditionUnknown,
+						Reason:  v1.TaskRunReasonToBeRetried.String(),
+						Message: "the step \"unamed-0\" in TaskRun \"test-taskrun-run-retry-pod-failure\" failed to pull the image \"\". The pod errored with the message: \".\"",
+					}},
+				},
+				TaskRunStatusFields: v1.TaskRunStatusFields{
+					Steps: []v1.StepState{{
+						Name:           "unamed-0",
+						Container:      "step-unamed-0",
+						ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "TaskRunImagePullFailed", FinishedAt: metav1.NewTime(time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC))}},
+					}},
+					RetriesStatus: []v1.TaskRunStatus{{
+						Status: duckv1.Status{
+							Conditions: duckv1.Conditions{apis.Condition{
+								Type:    apis.ConditionSucceeded,
+								Status:  corev1.ConditionFalse,
+								Reason:  "TaskRunImagePullFailed",
+								Message: "the step \"unamed-0\" in TaskRun \"test-taskrun-run-retry-pod-failure\" failed to pull the image \"\". The pod errored with the message: \".\"",
+							}},
+						},
+						TaskRunStatusFields: v1.TaskRunStatusFields{
+							StartTime:      &metav1.Time{Time: time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC)},
+							CompletionTime: &metav1.Time{Time: time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)},
+							PodName:        "test-taskrun-run-retry-pod-failure-pod",
+							Steps: []v1.StepState{{
+								Name:           "unamed-0",
+								Container:      "step-unamed-0",
+								ContainerState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "TaskRunImagePullFailed", FinishedAt: metav1.NewTime(time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC))}},
+							}},
+						},
+					}},
+				},
+			},
+		}
 		failedPod = &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-taskrun-run-retry-pod-failure-pod"},
 			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{

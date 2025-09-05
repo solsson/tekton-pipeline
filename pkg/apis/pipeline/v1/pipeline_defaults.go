@@ -60,4 +60,8 @@ func (pt *PipelineTask) SetDefaults(ctx context.Context) {
 	if pt.TaskSpec != nil {
 		pt.TaskSpec.SetDefaults(ctx)
 	}
+	// Default retryOn to "notSucceeded" if unset
+	if pt.RetryOn == "" {
+		pt.RetryOn = "notSucceeded"
+	}
 }

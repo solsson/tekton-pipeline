@@ -173,6 +173,7 @@ func TestPipelineTask_SetDefaults(t *testing.T) {
 				Name: "foo-task",
 				Kind: v1.NamespacedTaskKind,
 			},
+			RetryOn: "notSucceeded",
 		},
 	}, {
 		desc: "pipeline task with taskSpec - default param type must be " + string(v1.ParamTypeString),
@@ -196,6 +197,7 @@ func TestPipelineTask_SetDefaults(t *testing.T) {
 					}},
 				},
 			},
+			RetryOn: "notSucceeded",
 		},
 	}, {
 		desc: "pipeline task with taskRef - with default resolver",
@@ -210,6 +212,7 @@ func TestPipelineTask_SetDefaults(t *testing.T) {
 					Resolver: "git",
 				},
 			},
+			RetryOn: "notSucceeded",
 		},
 		defaults: map[string]string{
 			"default-resolver-type": "git",
@@ -231,6 +234,7 @@ func TestPipelineTask_SetDefaults(t *testing.T) {
 					Resolver: "custom resolver",
 				},
 			},
+			RetryOn: "notSucceeded",
 		},
 		defaults: map[string]string{
 			"default-resolver-type": "git",
